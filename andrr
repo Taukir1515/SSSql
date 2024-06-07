@@ -1,0 +1,245 @@
+Mobile Pentesting Note
+--------------------------
+
+##Windows##
+-----------------
+Android studio
+adb 
+apktool
+Jadx GUI
+
+##Linux
+-----------
+jarsigner
+	apt-cache search jarsigner
+
+hexdump
+
+android sdk
+dexdump 
+google-android-build-tools-installer
+	apt install google-android-build-tools-installer
+
+mobsf
+	git clone https://github.com/MobSF/Mobile-Security-Framework-MobSF.git
+
+keytool
+
+----------------------
+	static analysis
+----------------------
+## CMD ##
+Checking adb:
+adb devices
+adb shell
+exit
+
+## CMD ##
+Go to the folder to the APK file.
+Install the apk to the mobile emulator
+	adb install .\apk_name
+
+Make a new folder and move there.
+	mkdir "mob pentesting"
+	cd "mob pentesting"
+
+Check all packages
+	adb shell pm list packages
+
+Get location/path of specific package of apk file
+	adb shell pm path jakhar.aseem.diva
+
+Copy the path
+
+Download the apk
+	adb pull /data/app/jakhar.aseem.diva-1/base.apk
+
+dir
+	base.apk
+
+Open jadx and locate base.apk
+
+-----------------
+DIVA app
+-----------------
+Obj 1: Insecure Login
+---
+Enter random vendor key
+
+** As this app is running through jakhar.aseem.diva, and it has a process ID, if we can extract all the processes related to that process ID, we can find the entered login credentials in log file.
+
+Checking all processes
+	adb shell ps
+Copy process id (PID) of jakhar.aseem.diva
+
+Show log activities
+	adb shell
+	logcat | grep 7525
+
+Check the log with vendor key in plain text
+	diva-log: Error while processing transaction with credit card: 12345
+
+------------
+Obj 2: Hardcoading Issues - Part 1
+------------
+vendorsecretkey / password is hardcoded/written in source code.
+
+------------
+Obj 3: Insecure Data Storage - part 1
+------
+**In source code, we see that data is stored inside "SharedPreferences".
+
+Data is stored in default SharedPreferences folder inside jakhar.aseem.diva package which can be easily accessible.
+
+To get into SharedPreferences,
+	
+	adb shell
+	ls
+	cd data && cd data && cd jakhar.aseem.diva && cd shared_prefs
+	cat jakhar.aseem.diva_preferences.xml
+
+------------
+Obj 4: Insecure Data Storage - part 2
+------
+** Table name "myuser" and Database name "ids2" are hardcoded in source code. The jakhar.aseem.diva package contains ids2 database and also the app is using SQLite library. We can use SQLite viewer to extract the database. 
+
+** Not stored in a perfect manner.database should not be stored in the package.
+
+cd /data/data/jakhar.aseem.diva/databases
+
+ls
+
+ids2
+
+exit
+
+Download the database:
+	adb pull /data/data/jakhar.aseem.diva/databases/ids2
+
+Search online for SQLite viewer and drop the database
+
+------------
+Obj 5: Insecure Data Storage - part 3
+------
+
+** Credentials saved as Temp file inside jakhar.aseem.diva package and format is user:password
+
+cd /data/data/jakhar.aseem.diva
+ls
+cat uinfo607979149tmp
+
+
+------------
+Obj 6: Insecure Data Storage - part 4
+------
+
+**  Data saved in .uinfo.txt file in External storage (sdcard)
+
+cd /sdcard
+ls -la
+cat .uinfo.txt
+
+
+------------
+Obj 7: Input validation issues -part 1
+------
+
+SQL injection
+
+1'or'1'='1
+credentials are dumped for all users
+
+** The query construction this.mDB.rawQuery("SELECT * FROM sqliuser WHERE user = '" + srchtxt.getText().toString() + "'", null); directly concatenates user input into an SQL query string.
+
+** If the user inputs admin' OR '1'='1, the resulting query becomes:
+
+SELECT * FROM sqliuser WHERE user = 'admin' OR '1'='1'
+
+This query would return all rows in the sqliuser table because 1='1 is always true.
+
+** The code stores sensitive information (e.g., passwords and credit card numbers) in plain text
+
+
+------------
+Obj 8: Input validation issues -part 2
+------
+LFI
+show any file other than url
+
+** WebView is expected to load all valid URLs. But no input validation is applied. Directly uses the user-provided input without any form of validation or sanitization. This means that any text entered by the user is treated as a valid URL and is loaded into the WebView, regardless of whether it is safe or appropriate.
+
+
+create a file named hello.txt in /mnt/sdcard/
+
+search for "file:///mnt/sdcard/hello.txt"
+
+
+------------
+Obj 9: Access Control Issue - Part 1
+------
+# Try to access the API credentials from outside the app.
+
+* jakhar.aseem.diva.action.VIEW_CREDS is using as a new intent for viewAPICredentials method without any validation. any app connected to the intent can be capable to respond.
+
+
+adb shell
+
+am start -a activity_name
+am start -a jakhar.aseem.diva.action.VIEW_CREDS
+	
+	am= activity manager
+	-a= activity name
+
+
+------------
+Obj 10: Access Control Issue - Part 2
+------
+
+** The code uses an implicit intent to start another component (VIEW_CREDS2) within the application without explicitly specifying the target component. Implicit intents can be intercepted by other components on the device if they declare matching intent filters.
+
+**  Any other app installed on the device that declares an intent filter for "jakhar.aseem.diva.action.VIEW_CREDS2" can intercept this intent and potentially access sensitive data or perform unauthorized actions.
+
+** The code uses an implicit Intent with the action string "jakhar.aseem.diva.action.VIEW_CREDS2". Implicit Intents rely on the system finding an activity that can handle the action. This can be risky because another app might respond to the Intent with malicious intent. It's generally more secure to use explicit Intents that specify the target activity class.
+
+am start -n jakhar.aseem.diva/.APICreds2Activity -a jakhar.aseem.diva.action.VIEW_CREDS2 --ez check_pin false
+
+	* From AndroidManifest.xml, find activity of API
+	* put a "/" before the actual activity
+	* -n= Don't check API key
+
+	* -a= action or activity to show
+
+	* --ez= --ez <EXTRA_KEY> <EXTRA_BOOLEAN_VALUE>
+	* locate string.xml and find check_pin
+	* --ez check_pin false
+
+
+------------
+Obj 11: Access Control Issue - Part 3
+------
+## PIN for private note
+
+** The code uses SharedPreferences to store the user-entered PIN. While SharedPreferences are a convenient way to store app settings, they are not recommended for storing sensitive data like PINs. The data stored in SharedPreferences
+ is not encrypted by default and can be potentially accessed by other apps on the device with root access or through sophisticated attacks.
+
+ ** in NotesProvider, all data are hardcoded  in plain text.
+
+
+content query --uri content://jakhar.aseem.diva.provider.notesprovider/notes
+
+
+------------
+Obj 12: Hardcoding Issue - Part 2
+------
+
+** The code seems to rely on a key (hckey.getText().toString()) entered by the user to call a native method (djni.access) through the DivaJni class. However, there's no evidence of this key being validated against any predefined value. This suggests that there might be a pre-defined key hardcoded somewhere in the application logic (potentially within the DivaJni class) that grants access.
+
+** Divajni is connected to another library. If we can string that library, we can find the vendor key.
+
+
+private DivaJni djni > Divanjni > 
+soName = "divajni" > loadLibrary(soName) > Resources/lib/x86/libdivanjni.so
+
+apktool d base.apk
+	d= decompile
+strings base
